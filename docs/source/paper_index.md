@@ -151,6 +151,26 @@ training_args = GMPOConfig(
 )
 ```
 
+### Rethinking the Trust Region in LLM Reinforcement Learning
+
+**📜 Paper**: https://huggingface.co/papers/2602.04879
+
+Divergence Proximal Policy Optimization (DPPO) replaces PPO's ratio clipping, which over-penalizes low-probability tokens and under-constrains high-probability ones, with a trust region based on a direct estimate of the divergence between the rollout policy  \\( \mu \\) and the current policy  \\( \pi \\). A token's update is blocked only if it moves the ratio further from 1 and the divergence (binary or top-K approximations of TV or KL) exceeds  \\( \delta \\).
+
+TRL provides an experimental implementation, see [Experimental - DPPO](dppo):
+
+```python
+from trl.experimental.dppo import DPPOConfig, DPPOTrainer
+
+training_args = DPPOConfig(
+    divergence_type="binary_tv",  # or "binary_kl", "topk_tv", "topk_kl"
+    divergence_threshold=0.2,  # δ (0.05 for the KL variants)
+    max_importance_ratio=5.0,  # C
+    scale_rewards="none",  # group-relative advantages without std normalization
+    use_vllm=True,
+)
+```
+
 ### DAPO: An Open-Source LLM Reinforcement Learning System at Scale
 
 **📜 Paper**: https://huggingface.co/papers/2503.14476

@@ -1548,12 +1548,20 @@ class GRPOTrainer(_BaseTrainer):
         mm_token_type_ids=None,
         image_position_ids=None,
         sampling_mask=None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
-        """Compute log-probs, (optionally) entropies, and (optionally) the MoE load-balancing aux loss."""
+        score_ids=None,
+    ) -> tuple[torch.Tensor, ...]:
+        """
+        Compute log-probs, (optionally) entropies, and (optionally) the MoE load-balancing aux loss.
+
+        When `score_ids`, a `(B, logits_to_keep, K)` tensor of token ids padded with `-1`, is given, the log-probability
+        of each of those tokens at each completion position is also computed (without materializing the logits) and
+        returned as a fourth element of shape `(B, logits_to_keep, K)`, `0` at padding.
+        """
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
         all_aux_losses = []
+        all_score_logps = []
         for start in range(0, input_ids.size(0), batch_size):
             end = min(start + batch_size, input_ids.size(0))  # the last chunk can be smaller than batch_size
             input_ids_batch = input_ids[start:end]
@@ -1608,6 +1616,11 @@ class GRPOTrainer(_BaseTrainer):
                 support_ids = sampling_mask.new_full((*input_ids_batch.shape, sampling_mask.size(-1)), -1)
                 support_ids[:, -logits_to_keep:] = sampling_mask[start:end]
                 model_inputs["support_ids"] = support_ids
+            # Also score arbitrary tokens at each completion position (e.g. the sampler's top-k candidates)
+            if score_ids is not None:
+                padded_score_ids = score_ids.new_full((*input_ids_batch.shape, score_ids.size(-1)), -1)
+                padded_score_ids[:, -logits_to_keep:] = score_ids[start:end]
+                model_inputs["score_ids"] = padded_score_ids
 
             # Only the completion tokens are scored
             labels = input_ids_batch.masked_fill(attention_mask_batch == 0, -100)
@@ -1619,10 +1632,14 @@ class GRPOTrainer(_BaseTrainer):
                 all_entropies.append(outputs.entropy[:, -logits_to_keep:])
             if compute_aux_loss:
                 all_aux_losses.append(outputs.aux_loss)
+            if score_ids is not None:
+                all_score_logps.append(outputs.score_log_probs[:, -logits_to_keep:])
 
         logps = torch.cat(all_logps, dim=0)
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
         aux_loss = torch.stack(all_aux_losses).mean() if compute_aux_loss else None
+        if score_ids is not None:
+            return logps, entropies, aux_loss, torch.cat(all_score_logps, dim=0)
         return logps, entropies, aux_loss
 
     def training_step(self, model, inputs, num_items_in_batch):
